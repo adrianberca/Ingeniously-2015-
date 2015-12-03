@@ -1,0 +1,514 @@
+  #include <SoftwareSerial.h>
+  #include <avr/io.h>
+  #include <avr/interrupt.h>
+  #include <util/delay.h>
+  
+  //=========================== HC-SR04 ===============================================================================================================
+  #define US_PORTC PORTC
+  #define	US_PINC	 PINC
+  #define US_DDRC  DDRC
+  
+  #define FRONT_TRIGGER	PC4
+  #define FRONT_ECHO	PC5
+  
+  #define RIGHT_TRIGGER   PC2
+  #define RIGHT_ECHO      PC3
+  
+  
+  #define LEFT_TRIGER	PC0
+  #define LEFT_ECHO	PC1
+  
+  #define US_ERROR        -1
+  #define	US_NO_OBSTACLE	-2
+  
+  void HCSR04Init();
+  void HCSR04Trigger();
+  void search_park_place();
+  void parking_by_coordonates();
+  void cross_the_parking();
+  
+  
+  //==================================================================================================================================================
+  
+  
+  #define sbi(sfr, bit) (_SFR_BYTE(sfr) |=  _BV(bit))//turn led ON
+  #define cbi(sfr, bit) (_SFR_BYTE(sfr) &= ~_BV(bit))//turn led OFF
+  
+  SoftwareSerial bt(0,1);
+  int bluetoothVar;  // incoming data
+  int  ledpin = 13;      // LED pin
+  
+  float fata ;
+  float spate;
+  float stanga;
+  float dreapta;
+  int parcata = 0;///contor pt gasirea celui mai apropiat loc de parcare liber
+  int dat_cu_spatele = 0;
+  int nr_loc_parcare = 0;
+  
+  int loc_parcare_input ;//locul de parcare care mi se da ca input
+  int iesire;//iesirea care mi se da ca input
+  int masina_parcata = 0;
+  
+  int var = 0;//aceasta variabila o folosesc ca sa stiu ca numai daca a virat prima data dreapta, poate vira apoi stanga
+             //deoarece nu stiu din ce cauza de prima daca incepea sa vireze pe loc spre stanga
+  
+  
+  void HCSR04Init()
+  {
+          US_DDRC  |=(1 << RIGHT_TRIGGER);
+  	US_DDRC |=(1 << FRONT_TRIGGER);
+          US_DDRC |=(1 << LEFT_TRIGER);
+  }
+  
+  void HCSR04Trigger()
+  {
+  	//Send a 10uS pulse on trigger line
+  	
+  	US_PORTC |=(1<<FRONT_TRIGGER);	 //high
+          US_PORTC |=(1<<RIGHT_TRIGGER);	 //high
+          US_PORTC |=(1<<LEFT_TRIGER);;    //high
+  
+  	_delay_us(10);				//wait 10 uS
+  	
+          US_PORTC  &= ~(1<<RIGHT_TRIGGER);	//low
+  	US_PORTC  &= ~(1<<FRONT_TRIGGER);	//low
+          US_PORTC &= ~(1<<LEFT_TRIGER);	        //low
+          
+  }
+  
+  uint16_t Get_FRONT_SENSOR_PulseWidth()
+  {
+  	uint32_t i,result;
+  
+  	//Wait for the rising edge
+  	for(i=0;i<600000;i++)
+  	{
+  		if(!(US_PINC & (1<<FRONT_ECHO))) 
+  			continue;	//Line is still low, so wait
+  		else 
+  			break;		//High edge detected, so break.
+  	}
+  
+  	if(i==600000)
+  		return US_ERROR;	//Indicates time out
+  	
+  	//High Edge Found
+  
+  	//Setup Timer1
+  	TCCR1A=0X00;
+  	TCCR1B=(1<<CS11);	//Prescaler = Fcpu/8
+  	TCNT1=0x00;			//Init counter
+  
+  	//Now wait for the falling edge
+  	for(i=0;i<600000;i++)
+  	{
+  		if(US_PINC & (1<<FRONT_ECHO))
+  		{
+  			if(TCNT1 > 60000) break; else continue;
+  		}
+  		else
+  			break;
+  	}
+  
+  	if(i==600000)
+  		return US_NO_OBSTACLE;	//Indicates time out
+  
+  	//Falling edge found
+  
+  	result=TCNT1;
+  
+  	//Stop Timer
+  	TCCR1B=0x00;
+  
+  	if(result > 60000)
+  		return US_NO_OBSTACLE;	//No obstacle
+  	else
+  		return (result>>1);
+  }
+  
+  
+  uint16_t Get_RIGHT_SENSOR_PulseWidth()
+  {
+  	uint32_t i,result;
+  
+  	//Wait for the rising edge
+  	for(i=0;i<600000;i++)
+  	{
+  		if(!(US_PINC & (1<<RIGHT_ECHO))) 
+  			continue;	//Line is still low, so wait
+  		else 
+  			break;		//High edge detected, so break.
+  	}
+  
+  	if(i==600000)
+  		return US_ERROR;	//Indicates time out
+  	
+  	//High Edge Found
+  
+  	//Setup Timer1
+  	TCCR1A=0X00;
+  	TCCR1B=(1<<CS11);	//Prescaler = Fcpu/8
+  	TCNT1=0x00;			//Init counter
+  
+  	//Now wait for the falling edge
+  	for(i=0;i<600000;i++)
+  	{
+  		if(US_PINC & (1<<RIGHT_ECHO))
+  		{
+  			if(TCNT1 > 60000) break; else continue;
+  		}
+  		else
+  			break;
+  	}
+  
+  	if(i==600000)
+  		return US_NO_OBSTACLE;	//Indicates time out
+  
+  	//Falling edge found
+  
+  	result=TCNT1;
+  
+  	//Stop Timer
+  	TCCR1B=0x00;
+  
+  	if(result > 60000)
+  		return US_NO_OBSTACLE;	//No obstacle
+  	else
+  		return (result>>1);
+  }
+  
+  
+  uint16_t Get_LEFT_SENSOR_PulseWidth()
+  {
+  	uint32_t i,result;
+  
+  	//Wait for the rising edge
+  	for(i=0;i<600000;i++)
+  	{
+  		if(!(US_PINC & (1<<LEFT_ECHO))) 
+  			continue;	//Line is still low, so wait
+  		else 
+  			break;		//High edge detected, so break.
+  	}
+  
+  	if(i==600000)
+  		return US_ERROR;	//Indicates time out
+  	
+  	//High Edge Found
+  
+  	//Setup Timer1
+  	TCCR1A=0X00;
+  	TCCR1B=(1<<CS11);	//Prescaler = Fcpu/8
+  	TCNT1=0x00;			//Init counter
+  
+  	//Now wait for the falling edge
+  	for(i=0;i<600000;i++)
+  	{
+  		if(US_PINC & (1<<LEFT_ECHO))
+  		{
+  			if(TCNT1 > 60000) break; else continue;
+  		}
+  		else
+  			break;
+  	}
+  
+  	if(i==600000)
+  		return US_NO_OBSTACLE;	//Indicates time out
+  }
+                    
+                    
+  void setup() {
+    bt.begin(9600); // initialization
+    //bt.println("Press 1 to LED ON or 0 to LED OFF...");
+    pinMode(ledpin, OUTPUT);
+    //===============OUTPUT PINS============================================================  
+    DDRB = (1 << PORTB0) |(1 << PORTB1) | (1 << PORTB2) | (1 << PORTB3) |(1 << PORTB4) | (1 << PORTB5) ;//PORTB 0,1,2,3 for the engines, and PORTB4 is the standby
+    
+    
+  //======================================================================================
+  
+  //============================= these are for the PWM SETUP ============================
+  
+    DDRD = (1 << PORTD6) | (1 << PORTD5);//the PWM pin/THE PWM PIN the STDBY PIN
+  
+    TCCR0A = (1 << COM0A1) | (1 << WGM00)|(1 << WGM01)|(1 << COM0B1);//set CTC(clear time and commpare) bit, for reset the count at a moment and start again from the beginning 
+    
+    TCCR0B = (1 <<WGM02);//FAST PWM
+    
+    TCCR0B = (1 << CS02) | (1 << CS00);//start the TIMERS, start at 1024 prescalar
+  
+    // Bit 7 – ICNC1 - Input Capture Noise Canceler – Acest bit setat va activa opțiunea de noise cancel  a modului de captură.
+    // Norma bitul ICNC1 trebuia setat pentru TCCR1B
+    // Dacă modul de captură foloseste opțiunea de noise cancel, detectarea evenimentului va dura de 4 ori mai mult decât in mod normal.
+    // Acestă obțiune este folosită pentru o mai bună filtrare a semnalului de intrare, algoritmul de filtrare constând în generarea evenimentului
+    // de captură doar dacă ultimele 4 monitorizări au valori egale.
+    
+    //================================== AICI SETEZ VITEZA MOTOARELOR ======================================================
+    OCR0A = 75;//comparison for A - 8 bit TIMER (50% on and 50% off)    If I put OCR1A = 100, the engines will be 100 %
+    OCR0B = 75;
+   
+  
+    
+    
+    //TIMSK  = the register that control the interrupts, here we can set--- whe this happens, I want this to  happen, this interrupt to occur
+    //BIT1 - OCIE0A this is the bit that says..I want an interrupt to setup, such that when my comparison value for A matches my timmer value , I want to setup
+     
+    //TOIEO is te interrupt used to increase permanently the speed of ENGINES 
+    //TIMSK0 = (1 << TOIE0);//TOIE is that kind of interrupts that is used when it's overflow the comparison
+   // TIMSK0 = (1 << OCIE0A);//COMPARE
+    
+    //TCNT0 hold the TICS from TIMMER
+  //=====================================================================================
+  
+  
+  
+   // sei();//TURN ON external interrupts //DACA O SA COMENTEZ LINIA ASTA NU IMI MAI FACE NIMIC MASINA
+   
+  }
+  
+  float activateFrontSensor()
+  {
+        
+     uint16_t r;
+    //Send a trigger pulse
+  	HCSR04Trigger();
+  
+  	//Measure the width of pulse
+  	r=Get_FRONT_SENSOR_PulseWidth();
+  
+  	//Handle Errors
+  	float distanceFront;
+  
+  	distanceFront=(r/58.0);	//Convert to cm
+    return distanceFront;
+              
+  }
+  
+  float activateRightSensor()
+  {
+         uint16_t r;
+        //Send a trigger pulse
+  	HCSR04Trigger();
+  
+  	//Measure the width of pulse
+  	r=Get_RIGHT_SENSOR_PulseWidth();
+  
+  	//Handle Errors
+  	float distanceRight;
+  
+  	distanceRight=(r/58.0);	//Convert to cm
+    return distanceRight;
+  
+  }
+  
+  float activateLeftSensor()
+  {
+         uint16_t r;
+        //Send a trigger pulse
+  	HCSR04Trigger();
+  
+  	//Measure the width of pulse
+  	r=Get_LEFT_SENSOR_PulseWidth();
+  
+  	//Handle Errors
+  	float distanceLeft;
+  
+  	distanceLeft=(r/58.0);	//Convert to cm
+    return distanceLeft;
+  
+  }
+  
+  void delay_1ms(uint16_t ms) {
+      uint16_t i;
+      for(i=0;i<ms;i++) 
+          _delay_ms(1);
+  }
+  
+  
+  char turnOff(char c)
+  {
+    //I put a parameter at this function because I want that the variabe bluetooth take the value of this paramater, 
+    //So won't be confusing situation , between operations
+          cbi(PORTB,PORTB1);//TURN OFF LED1
+          cbi(PORTB,PORTB0);//TURN OFF LED2
+          cbi(PORTB,PORTB2);//TURN OFF LED3
+          cbi(PORTB,PORTB3);//TURN OFF LED4
+          
+          cbi(PORTD,PORTD6);//TURN OFF THE PWM
+          
+          return c;
+          
+  }
+  
+  
+    void search_park_place()
+  {
+    
+  //============================  //SET IO PORT DIRECTION FOR ALL SENSORS =======================================================================================================================	
+  	//Set io port direction of all sensors
+  	HCSR04Init();
+  	_delay_ms(2500);
+  //============================================================================================================================================================================================
+  
+     while(1)
+          {     
+             //====================== ULTRASONIC SENSORS SETUP ===================================
+          
+                
+                   bluetoothVar = bt.read();//THE INPUT that we give it
+                   if(bluetoothVar > '0' && bluetoothVar != '1')//if we give another command while it's executing the automatic parking comand
+                     {
+                     command_the_car(); 
+                     bluetoothVar = turnOff('t');//stops the engine
+                     break;//and go back to the main
+                     }
+                     
+   //============================ ACTIVATE SENSORS ==============================================================================================================================================
+                      float distanceFront;
+                      float distanceRight;
+                      float distanceLeft;
+                      
+                      distanceFront = activateFrontSensor();//CITIREA SENZORULUI DIN FATA
+                      distanceRight = activateRightSensor();//CITIREA SENZORULUI DIN PARTEA DREAPTA
+                      distanceLeft = activateLeftSensor();//CITIREA SENZORULUI DIN STANGA
+                      
+                      _delay_ms(10);
+  //============================================================================================================================================================================================
+  
+                 if(distanceFront < 9   && distanceRight > 40 && distanceLeft > 40  && var == 0)//daca intalneste zid in fata si in dreapta are mult loc liber , vireaza in dreapta
+                      {
+                          var = 1;  
+                          //VIREAZA DREAPTA
+                          OCR0A = 136;
+                          OCR0B = 136;
+                          cbi(PORTB,PORTB2);//Rotile din stanga
+                          sbi(PORTB,PORTB3);//Rotile din stanga
+                          
+                          sbi(PORTB,PORTB4); 
+                          sbi(PORTD,PORTD6);//SET PWMA ON    pt rotile din dreapta
+                          sbi(PORTD,PORTD5);//SET PWMB ON    pt rotile din stanga
+                          
+                          sbi(PORTB,PORTB0);//Rotile din dreapta
+                          cbi(PORTB,PORTB1);//Rotile din stanga
+                          
+                          
+                         
+                          _delay_ms(1300);
+                      
+                        
+                         
+                     }
+                 else   if(distanceFront < 9 && distanceRight < 20 && var == 1)//(if distanceFront < 14 && var == 1)
+                         {
+                         //VIREAZA STANGA
+                          OCR0A = 126;
+                          OCR0B = 126;
+                          sbi(PORTB,PORTB2);//Rotile din stanga
+                          cbi(PORTB,PORTB3);//Rotile din stanga
+                          
+                          sbi(PORTB,PORTB4); 
+                          sbi(PORTD,PORTD6);//SET PWMA ON    pt rotile din dreapta
+                          sbi(PORTD,PORTD5);//SET PWMB ON    pt rotile din stanga
+                          
+                          cbi(PORTB,PORTB0);//Rotile din dreapta
+                          sbi(PORTB,PORTB1);//Rotile din stanga
+                          _delay_ms(1700);
+                         }
+                         
+                   else while(distanceFront > 10)      
+                         {
+                          distanceFront = activateFrontSensor(); 
+                          //MERGE INAINTE
+                          OCR0A = 100;
+                          OCR0B = 100;
+                          sbi(PORTB,PORTB2);//Rotile din stanga
+                          cbi(PORTB,PORTB3);//Rotile din stanga
+                          
+                          sbi(PORTB,PORTB4); 
+                          sbi(PORTD,PORTD6);//SET PWMA ON    pt rotile din dreapta
+                          sbi(PORTD,PORTD5);//SET PWMB ON    pt rotile din stanga
+                          
+                          sbi(PORTB,PORTB0);//Rotile din dreapta
+                          cbi(PORTB,PORTB1);//Rotile din stanga
+                          
+                          _delay_ms(50);
+                          
+                          /*
+                          
+                          ///=======================DACA A DETECTAT UN LOC LIBER =======================================================================================================================================               
+                          if(distanceLeft < 80 && distanceLeft >36 && parcata ==0 )//a detectat un loc de parcare liber
+                           {
+                             //_delay_ms(1700);//am pus acest delay pt ca in momentul cand i-a viraje, la colt poate fi o masuratoare intre 70 si 40 chiar daca nu e loc de parcare
+                             //astfel asteapta o secunda si masoara din nou sa vada daca intradevar e loc de parcare sau a fost ceva inselator
+                                 
+                               parcata  =1;//am pus parcata = 1 ca daca mai gaseste in continuare un loc liber de parcare in timp ce cauta iesirea sa nu-l mai bage in seama fiindca deja gasise unul  
+                               
+                               //VIREAZA STANGA PENTRU A INTRA IN PARCARE
+                                OCR0A = 136;
+                                OCR0B = 136;
+                                sbi(PORTB,PORTB2);//Rotile din stanga
+                                cbi(PORTB,PORTB3);//Rotile din stanga
+                                
+                                sbi(PORTB,PORTB4); 
+                                sbi(PORTD,PORTD6);//SET PWMA ON    pt rotile din dreapta
+                                sbi(PORTD,PORTD5);//SET PWMB ON    pt rotile din stanga
+                                
+                                cbi(PORTB,PORTB0);//Rotile din dreapta
+                                sbi(PORTB,PORTB1);//Rotile din stanga
+                                _delay_ms(1900);
+                          
+                                while(distanceFront > 14)
+                                  {
+                                  //intra in  parcare pana cand ajunge foarte aproape de zidul din fata al parcarii
+                                  OCR0A = 100;
+                                  OCR0B = 100;
+                                  sbi(PORTB,PORTB2);//Rotile din stanga
+                                  cbi(PORTB,PORTB3);//Rotile din stanga
+                                  
+                                  sbi(PORTB,PORTB4); 
+                                  sbi(PORTD,PORTD6);//SET PWMA ON    pt rotile din dreapta
+                                  sbi(PORTD,PORTD5);//SET PWMB ON    pt rotile din stanga
+                                  
+                                  sbi(PORTB,PORTB0);//Rotile din dreapta
+                                  cbi(PORTB,PORTB1);//Rotile din stanga
+                                  
+                                  distanceFront = activateFrontSensor();//CITIREA SENZORULUI DIN FATA
+                                  
+                                  }
+		              }
+		*/
+		          if (distanceFront < 10)
+                                break;
+                          
+                         }
+                 
+                       
+     
+     
+                    
+              
+        }
+    
+  }
+  
+  void command_the_car()
+  {
+   
+  if(bluetoothVar == '1')//asta inseamna ca i-am dat comanda de parcare automata
+      {
+                       
+        search_park_place();
+      }
+  
+  }
+  
+    void loop() {
+      
+     
+      if (bt.available()) {  // if the data came 
+        bluetoothVar = bt.read(); // read byte
+       
+      command_the_car();  
+      }   
+    }
